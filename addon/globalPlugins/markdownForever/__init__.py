@@ -24,14 +24,13 @@ import ui
 from logHandler import log
 
 from . import updatecheck
-from . import settings
-from . import HTTPServer
 from .common import (
 	convertToHTML, convertToMD, copyToClipAsHTML,
 	getText, extractMetadata, getMetadataAndTextForMarkDown,
 	addonSummary, addonVersion,
 	addonPath, baseDir, configDir,
-	defaultLanguage
+	defaultLanguage,
+	migrate_legacy_markdown_extensions_config,
 )
 
 addonHandler.initTranslation()
@@ -55,7 +54,8 @@ confSpecs = {
 	"defaultFileName": 'string(default="")',
 	"markdownEngine": 'option("html2markdown", "html2text", default="html2text")',
 	"HTMLTemplate": 'string(default="default")',
-	"markdown2Extras": 'string(default="fenced-code-blocks,footnotes,header-ids,spoiler,strike,tables,task_list,underline,wiki-tables")',
+	"markdownExtensions": 'string(default="break-on-newline,fenced-code-blocks,footnotes,header-ids,strike,tables,task_list")',
+	"markdown2Extras": 'string(default="")',
 	"HTMLTemplates": {},
 	"HTTPServer": {
 		"host": 'string(default="127.0.0.1")',
@@ -65,7 +65,7 @@ confSpecs = {
 	}
 }
 config.conf.spec["markdownForever"] = confSpecs
-
+migrate_legacy_markdown_extensions_config()
 
 if not os.path.exists(configDir):
 	os.mkdir(configDir)
@@ -97,8 +97,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								   _("Settings"), _("Add-on settings"))
 		gui.mainFrame.sysTrayIcon.Bind(
 			wx.EVT_MENU,
-			lambda event: wx.CallAfter(
-				gui.mainFrame._popupSettingsDialog, settings.AddonSettingsDialog),
+			lambda event: wx.CallAfter(gui.mainFrame._popupSettingsDialog, self._get_settings_dialog()),
 			item
 		)
 		item = self.submenu.Append(
@@ -129,7 +128,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		gui.mainFrame.sysTrayIcon.menu.DestroyItem(self.submenu_item)
 
 	def terminate(self):
-		HTTPServer.stop()
+		self._get_http_server().stop()
 		self.removeMenu()
 		self.updatecheckThread.stop()
 		self.updatecheckThread.join()
@@ -139,11 +138,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	@staticmethod
 	def onHTTPServer(evt):
-		if not HTTPServer.isRun():
-			HTTPServer.run()
+		http_server = GlobalPlugin._get_http_server()
+		if not http_server.isRun():
+			http_server.run()
 		host = config.conf["markdownForever"]["HTTPServer"]["host"]
 		port = config.conf["markdownForever"]["HTTPServer"]["port"]
 		os.startfile(f"http://{host}:{port}/")
+
+	@staticmethod
+	def _get_settings_dialog():
+		from . import settings
+		return settings.AddonSettingsDialog
+
+	@staticmethod
+	def _get_http_server():
+		from . import HTTPServer
+		return HTTPServer
 
 	@staticmethod
 	def onDoc(evt, lang=defaultLanguage.split('_')[0]):

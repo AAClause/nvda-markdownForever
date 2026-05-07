@@ -21,15 +21,13 @@ import re
 import os
 import ssl
 import sys
+from html import escape
 baseDir = os.path.dirname(__file__)
 libs = os.path.join(baseDir, "lib")
-sys.path.append(libs)
+if libs not in sys.path:
+	sys.path.insert(0, libs)
 from bs4 import BeautifulSoup
 import yaml
-import winClipboard
-import markdown2
-import html2text
-import html2markdown
 
 import time
 import gui
@@ -61,30 +59,13 @@ markdownEngineLabels = [
 
 EXTRAS = {
 	"break-on-newline": _("Replace single new line characters with <br> when True"),
-	"code-friendly": _("Disable _ and __ for em and strong"),
-	"cuddled-lists": _("Allow lists to be cuddled to the preceding paragraph"),
-	"fenced-code-blocks": _("Allows a code block to not have to be indented by fencing it with '```' on a line before and after"),
+	"fenced-code-blocks": _("Enable fenced code blocks delimited by triple backticks"),
 	"footnotes": _("Support footnotes as in use on daringfireball.net and implemented in other Markdown processors (tho not in Markdown.pl v1.0.1)"),
 	"header-ids": _('Adds "id" attributes to headers. The id value is a slug of the header text'),
-	"html-classes": _('Takes a dict mapping html tag names (lowercase) to a string to use for a "class" tag attribute. Currently only supports "pre", "code", "table" and "img" tags'),
-	"link-patterns": _("Auto-link given regex patterns in text (e.g. bug number references, revision number references)"),
-	"markdown-in-html": _('Allow the use of markdown="1" in a block HTML tag to have markdown processing be done on its contents'),
-	"nofollow": _('Add rel="nofollow" to all <a> tags with an href.'),
-	"numbering": _("Create counters to number tables, figures, equations and graphs"),
-	"pyshell": _("Treats unindented Python interactive shell sessions as <code> blocks"),
-	"smarty-pants": _("Fancy quote, em-dash and ellipsis handling"),
-	"spoiler": _("A special kind of blockquote commonly hidden behind a click on SO"),
 	"strike": _("Parse ~~strikethrough~~ formatting"),
-	"target-blank-links": _('Add target="_blank" to all <a> tags with an href. This causes the link to be opened in a new tab upon a click'),
 	"tables": _("Tables using the same format as GFM and PHP-Markdown Extra"),
-	"tag-friendly": _("Requires atx style headers to have a space between the # and the header text. Useful for applications that require twitter style tags to pass through the parser"),
 	"task_list": _("Allows github-style task lists (i.e. check boxes)"),
-	"underline": _("Parse --underline-- formatting"),
-	"use-file-vars": _("Look for an Emacs-style markdown-extras file variable to turn on Extras"),
-	"wiki-tables": _("Google Code Wiki table syntax support"),
-	"xml": _("Passes one-liner processing instructions and namespaced XML tags"),
 }
-sys.path.remove(libs)
 
 _addonDir = os.path.join(baseDir, "..", "..")
 addonInfos = addonHandler.Addon(_addonDir).manifest
@@ -100,6 +81,130 @@ pathPattern = r"^(?:%|[a-zA-Z]:[\\/])[^:*?\"<>|]+\.html?$"
 URLPattern = r"^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$"
 minCharTemplateName = 1
 maxCharTemplateName = 28
+
+_TEMPLATE_CACHE = {}
+_MARKDOWN_RENDERER_CACHE = {}
+_EXTRA_KEYS = tuple(EXTRAS.keys())
+_EXTRA_INDEX_MAP = {name: idx for idx, name in enumerate(_EXTRA_KEYS)}
+_MARKDOWN_IT_CLASS = None
+_FOOTNOTE_PLUGIN = None
+_TASKLISTS_PLUGIN = None
+_MARKDOWN_IT_VERSION = "unknown"
+_HTML2TEXT_MODULE = None
+_HTML2MARKDOWN_MODULE = None
+
+
+def clearHTMLTemplateCache():
+	_TEMPLATE_CACHE.clear()
+
+class MarkdownRenderResult:
+	def __init__(self, html, toc_html=None):
+		self.html = html
+		self.toc_html = toc_html
+
+	def __str__(self):
+		return self.html
+
+
+def _slugify_heading(text):
+	slug = re.sub(r"[^\w\s-]", "", (text or "").strip().lower())
+	slug = re.sub(r"[-\s]+", "-", slug).strip("-")
+	return slug or "heading"
+
+
+def _ensure_markdown_modules():
+	global _MARKDOWN_IT_CLASS, _FOOTNOTE_PLUGIN, _TASKLISTS_PLUGIN, _MARKDOWN_IT_VERSION
+	if _MARKDOWN_IT_CLASS is not None:
+		return
+	if libs not in sys.path:
+		sys.path.insert(0, libs)
+	import markdown_it
+	from markdown_it import MarkdownIt
+	from mdit_py_plugins.footnote import footnote_plugin
+	from mdit_py_plugins.tasklists import tasklists_plugin
+	_MARKDOWN_IT_CLASS = MarkdownIt
+	_FOOTNOTE_PLUGIN = footnote_plugin
+	_TASKLISTS_PLUGIN = tasklists_plugin
+	_MARKDOWN_IT_VERSION = getattr(markdown_it, "__version__", "unknown")
+
+
+def _get_html2text_module():
+	global _HTML2TEXT_MODULE
+	if _HTML2TEXT_MODULE is None:
+		if libs not in sys.path:
+			sys.path.insert(0, libs)
+		import html2text as _html2text
+		_HTML2TEXT_MODULE = _html2text
+	return _HTML2TEXT_MODULE
+
+
+def _get_html2markdown_module():
+	global _HTML2MARKDOWN_MODULE
+	if _HTML2MARKDOWN_MODULE is None:
+		if libs not in sys.path:
+			sys.path.insert(0, libs)
+		import html2markdown as _html2markdown
+		_HTML2MARKDOWN_MODULE = _html2markdown
+	return _HTML2MARKDOWN_MODULE
+
+
+def _render_code_block(code, lang_name, attrs):
+	lang_class = f' class="language-{escape(lang_name)}"' if lang_name else ""
+	return f"<pre><code{lang_class}>{escape(code or '')}</code></pre>"
+
+
+def _get_markdown_renderer(extras):
+	cache_key = tuple(sorted(set(extras)))
+	renderer = _MARKDOWN_RENDERER_CACHE.get(cache_key)
+	if renderer:
+		return renderer
+	_ensure_markdown_modules()
+	renderer = _MARKDOWN_IT_CLASS(
+		"commonmark",
+		{
+			"html": True,
+			"breaks": "break-on-newline" in extras,
+			"linkify": False,
+			"highlight": _render_code_block,
+		},
+	)
+	if "tables" in extras:
+		renderer.enable("table")
+	if "strike" in extras:
+		renderer.enable("strikethrough")
+	if "footnotes" in extras:
+		renderer.use(_FOOTNOTE_PLUGIN)
+	if "task_list" in extras:
+		renderer.use(_TASKLISTS_PLUGIN, enabled=True, label=True)
+	_MARKDOWN_RENDERER_CACHE[cache_key] = renderer
+	return renderer
+
+
+def _build_heading_ids_and_toc(html):
+	soup = BeautifulSoup(html, "html.parser")
+	used_ids = set()
+	toc_items = []
+	for heading in soup.find_all(re.compile("^h[1-6]$")):
+		heading_text = heading.get_text(" ", strip=True)
+		if not heading_text:
+			continue
+		heading_id = heading.get("id") or _slugify_heading(heading_text)
+		candidate = heading_id
+		suffix = 2
+		while candidate in used_ids:
+			candidate = f"{heading_id}-{suffix}"
+			suffix += 1
+		heading["id"] = candidate
+		used_ids.add(candidate)
+		toc_items.append((candidate, heading_text))
+	toc_html = None
+	if len(toc_items) > 1:
+		toc_parts = ["<ul>"]
+		for anchor, text in toc_items:
+			toc_parts.append(f'<li><a href="#{anchor}">{escape(text)}</a></li>')
+		toc_parts.append("</ul>")
+		toc_html = "".join(toc_parts)
+	return str(soup), toc_html
 
 
 def realpath(path):
@@ -238,10 +343,15 @@ def escapeHTML(text):
 
 
 def md2HTML(md, metadata=None):
-	extras = getMarkdown2Extras()
-	if metadata and metadata["toc"]:
-		extras.append("toc")
-	return markdown2.markdown(md, extras=extras)
+	extras = getMarkdownExtensions()
+	renderer = _get_markdown_renderer(extras)
+	html = renderer.render(md or "")
+	toc_requested = bool(metadata and metadata.get("toc"))
+	assign_heading_ids = toc_requested or ("header-ids" in extras)
+	toc_html = None
+	if assign_heading_ids:
+		html, toc_html = _build_heading_ids_and_toc(html)
+	return MarkdownRenderResult(html, toc_html=toc_html)
 
 
 def writeFile(fp, content):
@@ -258,10 +368,9 @@ def getFileContent(fp):
 	if not os.path.exists(fp) and os.path.exists(fp_):
 		fp = fp_
 	try:
-		f = open(fp, "rb")
-		text = f.read().decode("UTF-8")
+		with open(fp, "rb") as f:
+			text = f.read().decode("UTF-8")
 		metadata, content = extractMetadata(text)
-		f.close()
 	except BaseException as err:
 		msg = _("Unable to include “{filePath}”").format(filePath=fp)
 		content = f'<div class="MDF_err" role="complementary">{msg}: {escapeHTML(repr(err))}</div>'
@@ -390,6 +499,20 @@ def extractMetadata(text):
 	return metadata, o["before"] + '\n' + text + '\n' + o["after"]
 
 
+def _load_json_template(fp):
+	try:
+		mtime = os.path.getmtime(fp)
+	except OSError:
+		mtime = -1
+	cached = _TEMPLATE_CACHE.get(fp)
+	if cached and cached[0] == mtime:
+		return cached[1]
+	with open(fp, encoding="utf-8") as readFile:
+		templateEntry = json.load(readFile)
+	_TEMPLATE_CACHE[fp] = (mtime, templateEntry)
+	return templateEntry
+
+
 def getHTMLTemplate(name=None):
 	if not name:
 		name = config.conf["markdownForever"]["HTMLTemplate"]
@@ -405,9 +528,7 @@ def getHTMLTemplate(name=None):
 		fp = HTMLTemplateDir
 	else:
 		fp = os.path.join(curDir, "res", "default.tpl")
-	with open(fp) as readFile:
-		templateEntry = json.load(readFile)
-		return templateEntry
+	return _load_json_template(fp)
 
 
 def getHTMLTemplates():
@@ -446,6 +567,7 @@ def getReplacements(lang):
 			locale.setlocale(locale.LC_ALL, lang)
 	except locale.Error as err:
 		log.error(err)
+	_ensure_markdown_modules()
 	replacements = [
 		("%day%", time.strftime("%A"), 1),
 		("%Day%", time.strftime("%A").capitalize(), 1),
@@ -459,8 +581,8 @@ def getReplacements(lang):
 		("%time%", time.strftime("%X"), 1),
 		("%now%", time.strftime("%c"), 1),
 		("%addonVersion%", addonInfos["version"], 1),
-		("%markdown2Version%", markdown2.__version__, 1),
-		("%html2textVersion%", '.'.join(map(str, html2text.__version__)), 1),
+		("%markdownItVersion%", _MARKDOWN_IT_VERSION, 1),
+		("%html2textVersion%", '.'.join(map(str, _get_html2text_module().__version__)), 1),
 		("%NVDAVersion%", versionInfo.version, 1),
 		("%toc%", internalTocTag, 0)
 	]
@@ -551,9 +673,9 @@ def convertToMD(text, metadata, display=True):
 	if metadata["detectExtratags"]:
 		text = backTranslateExtraTags(text)
 	if config.conf["markdownForever"]["markdownEngine"] == "html2markdown":
-		convert = html2markdown.convert
+		convert = _get_html2markdown_module().convert
 	else:
-		convert = html2text.html2text
+		convert = _get_html2text_module().html2text
 	res = ("%s\n%s" % (dmp, convert(text))).strip()
 	if display:
 		pre = (title + " - ") if title else title
@@ -564,8 +686,18 @@ def convertToMD(text, metadata, display=True):
 
 
 def copyToClipAsHTML(html):
-	winClipboard.copy(html, html=True)
-	return html == winClipboard.get(html=True)
+	if not isinstance(html, str):
+		return False
+	html_data_object = wx.HTMLDataObject()
+	html_data_object.SetHTML(html)
+	if not wx.TheClipboard.Open():
+		log.error("Unable to open clipboard")
+		return False
+	try:
+		wx.TheClipboard.Clear()
+		return wx.TheClipboard.SetData(html_data_object)
+	finally:
+		wx.TheClipboard.Close()
 
 
 def translate_back_toc(s, idx=False):
@@ -685,14 +817,23 @@ def convertToHTML(text, metadata, save=False, src=False, useTemplateHTML=True, d
 			return content
 
 
-def getMarkdown2Extras(index=False, extras=None):
+def migrate_legacy_markdown_extensions_config():
+	legacy = str(config.conf["markdownForever"]["markdown2Extras"] or "").strip()
+	if not legacy:
+		return
+	filtered = [e.strip() for e in legacy.split(",") if e.strip() in _EXTRA_INDEX_MAP]
+	if filtered:
+		config.conf["markdownForever"]["markdownExtensions"] = ",".join(filtered)
+	config.conf["markdownForever"]["markdown2Extras"] = ""
+
+
+def getMarkdownExtensions(index=False, extras=None):
 	if not extras:
-		extras = config.conf["markdownForever"]["markdown2Extras"].split(',')
+		extras = config.conf["markdownForever"]["markdownExtensions"].split(",")
 	if index:
-		return tuple([list(EXTRAS.keys()).index(extra) for extra in extras if extra in EXTRAS.keys()])
-	return [extra for extra in extras if extra in EXTRAS.keys()]
+		return tuple([_EXTRA_INDEX_MAP[extra] for extra in extras if extra in _EXTRA_INDEX_MAP])
+	return [extra for extra in extras if extra in _EXTRA_INDEX_MAP]
 
 
-def getMarkdown2ExtrasFromIndexes(extras):
-	keys = list(EXTRAS.keys())
-	return [keys[extra] for extra in extras if 0 <= extra < len(keys)]
+def getMarkdownExtensionsFromIndexes(extras):
+	return [_EXTRA_KEYS[extra] for extra in extras if 0 <= extra < len(_EXTRA_KEYS)]

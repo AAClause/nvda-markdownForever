@@ -194,7 +194,7 @@ They can be reached from the NVDA menu -> Settings MarkdownForever -> Settings a
 * "Generate corresponding metadata from HTML source": When converting an HTML source file to Markdown, it attempts to guess the metadata from the source code (title, lang, filename etc) and generate the [metadata block](#optionnal-metadata-block) for you.
 * "Default action in Interactive mode": This allows to choose the default action which will be performed when pressing the Enter key in [Interactive mode:](#interactive-mode) Show the generated content in your browser, in a virtual buffer or put it in the clipboard.
 * "Markdown engine": MarkdownForever allows you to choose between two conversion engines, [HTML2Text](https://pypi.org/project/html2text/) and [HTML2Markdown.](https://pypi.org/project/html2markdown/) Just experiment and choose the one you prefer, according to your needs or the produced result.
-* "Markdown2 extras": see <https://github.com/trentm/python-markdown2/wiki/Extras>.
+* "Markdown extensions": configure supported `markdown-it-py` features (tables, task lists, footnotes, heading IDs, etc.).
 * "Path": Here you can set a default save location on your hard drive for your converted documents. it comes in handy if you always use the same folder to store all your work.
 * "Manage HTML templates": This will open a dialog box allowing to add, edit and delete HTML templates. With templates, you will be able to customize visual aspects of your generated HTML documents using CSS (cascading styles sheets), the language responsible for page styling. This will let you change colors, layout or add images to your productions and build a template for every specific need. There are of course many tutorials to learn CSS available on the web and [this one](https://www.htmldog.com/guides/css/beginner/) can be a good starting point.
 
@@ -224,8 +224,7 @@ They can be reached from the NVDA menu -> Settings MarkdownForever -> Settings a
 * Download [development version](https://andreabc.net/projects/NVDA_addons/markdownForever.nvda-addon?channel=dev)
 * GitHub repository: [aaclause/NVDA-markdownForever](https://github.com/aaclause/nvda-markdownForever)
 * **Included dependencies**:
-	- [Markdown2](https://github.com/trentm/python-markdown2) (2.3.10)
+	- [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 	- [HTML2Markdown](https://github.com/dlon/html2markdown)
-	- [HTML2Text](https://pypi.org/project/html2text/) (2020.1.16)
+	- [HTML2Text](https://pypi.org/project/html2text/) (2025.4.15)
 	- [PyYAML](https://pypi.org/project/PyYAML/)
-	- [WinClipboard](https://github.com/aaclause/python-winClipboard)

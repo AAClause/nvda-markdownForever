@@ -18,9 +18,10 @@ from . import HTTPServer
 from .common import (addonSummary, configDir,
 	IM_actionLabels, IM_actions,
 	markdownEngines, markdownEngineLabels,
-	EXTRAS, getMarkdown2Extras, getMarkdown2ExtrasFromIndexes,
+	EXTRAS, getMarkdownExtensions, getMarkdownExtensionsFromIndexes,
 	getHTMLTemplates, getHTMLTemplate,
 	getDefaultHTMLTemplateID, getHTMLTemplateFromID,
+	clearHTMLTemplateCache,
 	realpath, minCharTemplateName, maxCharTemplateName,
 	translate_back_toc)
 
@@ -94,12 +95,12 @@ class GeneralDlg(gui.settingsDialogs.SettingsPanel):
 		self.markdownEngineListBox = sHelper.addLabeledControl(
 			markdownEngineText, wx.Choice, choices=markdownEngineLabels)
 		self.markdownEngineListBox.SetSelection(idEngine)
-		label = _("Markdo&wn2 extras:")
+		label = _("Markdo&wn extensions:")
 		choices = [f"{k}. {v}" for k, v in EXTRAS.items()]
-		self.markdown2Extras = sHelper.addLabeledControl(
+		self.markdownExtensions = sHelper.addLabeledControl(
 			label, gui.nvdaControls.CustomCheckListBox, choices=choices)
-		self.markdown2Extras.CheckedItems = getMarkdown2Extras(True)
-		self.markdown2Extras.Select(0)
+		self.markdownExtensions.CheckedItems = getMarkdownExtensions(True)
+		self.markdownExtensions.Select(0)
 		self.defaultPath = sHelper.addLabeledControl(
 			_("Pat&h:"), wx.TextCtrl, value=config.conf["markdownForever"]["defaultPath"])
 
@@ -112,11 +113,6 @@ class GeneralDlg(gui.settingsDialogs.SettingsPanel):
 		self.fileNameTextCtrl = sHelper.addLabeledControl(
 			fileNameText, wx.TextCtrl)
 		self.fileNameTextCtrl.SetValue(config.conf["markdownForever"]["defaultFileName"])
-
-	def onManageHTMLTemplates(self, evt):
-		manageHTMLTemplatesDialog = ManageHTMLTemplatesDlg(self)
-		if manageHTMLTemplatesDialog.ShowModal() == wx.ID_OK:
-			self.manageHTMLTemplatesBtn.SetFocus()
 
 	def onChoosePath(self, evt):
 		dlg = wx.DirDialog(self, message=_("Choose a folder"),
@@ -139,6 +135,11 @@ class GeneralDlg(gui.settingsDialogs.SettingsPanel):
 
 		defaultPath = self.defaultPath.GetValue()
 		if not os.path.exists(realpath(defaultPath)):
+			gui.messageBox(
+				_("Invalid folder path."),
+				addonSummary,
+				wx.OK | wx.ICON_ERROR
+			)
 			return self.defaultPath.SetFocus()
 		config.conf["markdownForever"]["toc"] = self.tableOfContentsCheckBox.IsChecked()
 		config.conf["markdownForever"]["autonumber-headings"] = self.numberHeadingsCheckBox.IsChecked()
@@ -149,9 +150,10 @@ class GeneralDlg(gui.settingsDialogs.SettingsPanel):
 		config.conf["markdownForever"]["markdownEngine"] = markdownEngines[self.markdownEngineListBox.GetSelection()]
 		if defaultPath:
 			config.conf["markdownForever"]["defaultPath"] = defaultPath
-			config.conf["markdownForever"]["defaultFileName"] = ''.join([c for c in self.fileNameTextCtrl.GetValue() if c not in '\r\n	\/:*?"<>|']).strip()
-		config.conf["markdownForever"]["markdown2Extras"] = ','.join(
-			getMarkdown2ExtrasFromIndexes(self.markdown2Extras.CheckedItems))
+			config.conf["markdownForever"]["defaultFileName"] = ''.join([c for c in self.fileNameTextCtrl.GetValue() if c not in '\r\n\t\\/:*?"<>|']).strip()
+		config.conf["markdownForever"]["markdownExtensions"] = ",".join(
+			getMarkdownExtensionsFromIndexes(self.markdownExtensions.CheckedItems))
+		config.conf["markdownForever"]["markdown2Extras"] = ""
 
 
 class ManageHTMLTemplatesDlg(gui.settingsDialogs.SettingsPanel):
@@ -229,6 +231,7 @@ class ManageHTMLTemplatesDlg(gui.settingsDialogs.SettingsPanel):
 			config.conf["markdownForever"]["HTMLTemplates"][templateName] = templateDescription
 			with open(fp, "w") as writeFile:
 				json.dump(entryDialog.templateEntry, writeFile, indent=4)
+			clearHTMLTemplateCache()
 			self.refreshTemplatesList(templateName)
 		entryDialog.Destroy()
 
@@ -248,6 +251,7 @@ class ManageHTMLTemplatesDlg(gui.settingsDialogs.SettingsPanel):
 		fp = "%s/%s.tpl" % (configDir, templateName)
 		if os.path.exists(fp):
 			os.remove(fp)
+		clearHTMLTemplateCache()
 		self.refreshTemplatesList()
 		self.HTMLTemplatesListBox.SetSelection(removeIndex-1)
 		self.HTMLTemplatesListBox.SetFocus()
@@ -258,12 +262,22 @@ class ManageHTMLTemplatesDlg(gui.settingsDialogs.SettingsPanel):
 			getHTMLTemplate("default")["content"])
 		if entryDialog.ShowModal() == wx.ID_OK:
 			templateName = entryDialog.templateEntry["name"]
+			if templateName in getHTMLTemplates():
+				gui.messageBox(
+					_("A template with this name already exists."),
+					addonSummary,
+					wx.OK | wx.ICON_ERROR
+				)
+				entryDialog.Destroy()
+				self.HTMLTemplatesListBox.SetFocus()
+				return
 			templateDescription = entryDialog.templateEntry["description"]
 			fp = "%s/%s.tpl" % (configDir, templateName)
 			config.conf["markdownForever"]["HTMLTemplates"][templateName] = templateDescription
 			with open(fp, "w") as writeFile:
 				json.dump(entryDialog.templateEntry, writeFile, indent=4)
-			self.refreshTemplatesList(self.refreshTemplatesList(templateName))
+			clearHTMLTemplateCache()
+			self.refreshTemplatesList(templateName)
 		entryDialog.Destroy()
 
 	def onSave(self):
@@ -362,19 +376,28 @@ class WebServerDlg(gui.settingsDialogs.SettingsPanel):
 
 	def getRootFolders(self):
 		out = []
-		for k, v in config.conf["markdownForever"]["HTTPServer"]["rootDirs"].copy():
+		for _, v in config.conf["markdownForever"]["HTTPServer"]["rootDirs"].copy().items():
 			out.append(v)
 		return out
 
 	def onSave(self):
-		host = self.host.GetValue()
+		host = self.host.GetValue().strip()
 		port = self.port.GetValue()
-		defaultEncoding = self.defaultEncoding.GetValue()
+		defaultEncoding = self.defaultEncoding.GetValue().strip()
 		if host:
 			config.conf["markdownForever"]["HTTPServer"]["host"] = host
 		if port:
 			config.conf["markdownForever"]["HTTPServer"]["port"] = port
 		if defaultEncoding:
+			try:
+				"test".encode(defaultEncoding)
+			except LookupError:
+				gui.messageBox(
+					_("Invalid text encoding."),
+					addonSummary,
+					wx.OK | wx.ICON_ERROR
+				)
+				return self.defaultEncoding.SetFocus()
 			config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"] = defaultEncoding
 
 

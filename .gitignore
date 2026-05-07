@@ -130,3 +130,4 @@ tests/
 tmp/
 /*.zip
 manifest.ini
+addon/globalPlugins/markdownForever/lib/

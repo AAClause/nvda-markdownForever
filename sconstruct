@@ -5,8 +5,11 @@
 
 import codecs
 import gettext
+import json
 import os
 import os.path
+import subprocess
+import tempfile
 import zipfile
 import sys
 
@@ -20,6 +23,106 @@ sys.dont_write_bytecode = True
 
 # Bytecode should not be written for build vars module to keep the repository root folder clean.
 import buildVars  # NOQA: E402
+
+
+def _ensure_python_libs():
+	"""Download and keep vendored libs pinned and current."""
+	libs_base = os.path.join("addon", "globalPlugins", "markdownForever", "lib")
+	legacy_files = (
+		"markdown2.py",
+		"winClipboard.py",
+	)
+	legacy_dirs = (
+		"pygments",
+	)
+	versions_fp = os.path.join(libs_base, ".vendor_versions.json")
+	required_packages = {
+		"markdown-it-py": "4.2.0",
+		"mdurl": "0.1.2",
+		"mdit-py-plugins": "0.6.0",
+		"beautifulsoup4": "4.14.3",
+		"soupsieve": "2.8.3",
+		"html2text": "2025.4.15",
+		"PyYAML": "6.0.3",
+	}
+	required_package_dirs = (
+		"markdown_it",
+		"mdurl",
+		"mdit_py_plugins",
+		"bs4",
+		"soupsieve",
+		"html2text",
+		"yaml",
+	)
+	current_versions = {}
+	if os.path.isfile(versions_fp):
+		try:
+			with open(versions_fp, "r", encoding="utf-8") as f:
+				current_versions = json.load(f)
+		except (json.JSONDecodeError, OSError):
+			current_versions = {}
+	all_package_dirs_present = all(
+		os.path.isdir(os.path.join(libs_base, package_dir))
+		for package_dir in required_package_dirs
+	)
+	for legacy_file in legacy_files:
+		legacy_path = os.path.join(libs_base, legacy_file)
+		if os.path.isfile(legacy_path):
+			os.remove(legacy_path)
+	for legacy_dir in legacy_dirs:
+		legacy_path = os.path.join(libs_base, legacy_dir)
+		if os.path.isdir(legacy_path):
+			for root, dirs, files in os.walk(legacy_path, topdown=False):
+				for filename in files:
+					os.remove(os.path.join(root, filename))
+				for directory in dirs:
+					os.rmdir(os.path.join(root, directory))
+			os.rmdir(legacy_path)
+	if current_versions == required_packages and all_package_dirs_present:
+		return
+	os.makedirs(libs_base, exist_ok=True)
+	print("Vendored libs are out of date. Downloading pinned wheels...")
+	with tempfile.TemporaryDirectory(prefix="markdown-forever-libs-") as wheel_dir:
+		for package_name, version in required_packages.items():
+			download_cmd = [
+				sys.executable,
+				"-m",
+				"pip",
+				"download",
+				f"{package_name}=={version}",
+				"--dest",
+				wheel_dir,
+				"--only-binary",
+				":all:",
+			]
+			try:
+				subprocess.run(download_cmd, check=True)
+			except subprocess.CalledProcessError as err:
+				raise RuntimeError(
+					f"Could not download pinned dependency {package_name}=={version}. "
+					"Check network/index accessibility or adjust pinned versions."
+				) from err
+			wheel_name_prefix = package_name.replace("-", "_").lower() + "-" + version
+			wheel_candidates = [
+				os.path.join(wheel_dir, filename)
+				for filename in os.listdir(wheel_dir)
+				if filename.lower().startswith(wheel_name_prefix) and filename.lower().endswith(".whl")
+			]
+			if not wheel_candidates:
+				raise RuntimeError(f"Downloaded wheel not found for {package_name}=={version}.")
+			with zipfile.ZipFile(wheel_candidates[0], "r") as wheel_zip:
+				wheel_zip.extractall(libs_base)
+			if package_name == "PyYAML":
+				yaml_dir = os.path.join(libs_base, "yaml")
+				for filename in os.listdir(yaml_dir):
+					if filename.startswith("_yaml.") and filename.endswith(".pyd"):
+						os.remove(os.path.join(yaml_dir, filename))
+			print(f"Using {package_name} {version}")
+	with open(versions_fp, "w", encoding="utf-8") as f:
+		json.dump(required_packages, f, indent=2, sort_keys=True)
+
+
+_ensure_python_libs()
 
 
 def md2html(source, dest):

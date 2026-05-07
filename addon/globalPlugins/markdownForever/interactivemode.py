@@ -5,9 +5,11 @@
 # <https://github.com/aaclause/nvda-markdownForever>
 
 import re
+import os
 
 import gui
 import wx
+import ui
 
 import addonHandler
 import api
@@ -18,6 +20,7 @@ from .common import (
 	getHTMLTemplates, getHTMLTemplateFromID, getDefaultHTMLTemplateID,
 	getMetadataBlock, extractMetadata,
 	convertToHTML, convertToMD, copyToClipAsHTML,
+	getReplacements, writeFile,
 	addonSummary, IM_actions,
 	translate_back_toc
 )
@@ -90,7 +93,7 @@ class InteractiveModeDlg(wx.Dialog):
 		detectExtratagsText = _("&Detect extratags if possible")
 		self.detectExtratagsCheckBox = sHelper.addItem(
 			wx.CheckBox(self, label=detectExtratagsText))
-		self.detectExtratagsCheckBox.SetValue(True)
+		self.detectExtratagsCheckBox.SetValue(metadata["detectExtratags"])
 
 		titleLabelText = _("&Title:")
 		self.titleTextCtrl = sHelper.addLabeledControl(
@@ -255,7 +258,7 @@ class InteractiveModeDlg(wx.Dialog):
 		metadata["title"] = self.titleTextCtrl.GetValue()
 		metadata["subtitle"] = self.subtitleTextCtrl.GetValue()
 		metadata["path"] = self.pathTextCtrl.GetValue()
-		metadata["filename"] = ''.join([c for c in self.fileNameTextCtrl.GetValue() if c not in '\r\n	\/:*?"<>|']).strip()
+		metadata["filename"] = ''.join([c for c in self.fileNameTextCtrl.GetValue() if c not in '\r\n\t\\/:*?"<>|']).strip()
 		templateID = self.HTMLTemplatesListBox.GetSelection()
 		metadata["template"] = getHTMLTemplateFromID(templateID)
 
@@ -277,7 +280,10 @@ class InteractiveModeDlg(wx.Dialog):
 		metadata = self.metadata
 		destFormatChoices_ = self.destFormatListBox.GetSelection()
 		if destFormatChoices_ == 0:
-			copyToClipAsHTML(convertToHTML(self.text, metadata, display=False))
+			if copyToClipAsHTML(convertToHTML(self.text, metadata, display=False)):
+				ui.message(_("Formatted HTML copied to clipboard"))
+			else:
+				return ui.message(_("Unable to copy formatted HTML to clipboard"))
 		elif destFormatChoices_ == 1:
 			api.copyToClip(convertToHTML(
 				self.text, metadata, src=True, display=False))
@@ -298,7 +304,7 @@ class InteractiveModeDlg(wx.Dialog):
 		dlg = wx.FileDialog(None, _("Select the location"),
 							metadata["path"], metadata["filename"], format, style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
 		if dlg.ShowModal() == wx.ID_OK:
-			fp = dlg.GetDirectory() + '\\' + dlg.GetFilename()
+			fp = os.path.join(dlg.GetDirectory(), dlg.GetFilename())
 			if source and destFormatChoices_ != 2:
 				text = self.text
 				conserveExtraTags = gui.messageBox(

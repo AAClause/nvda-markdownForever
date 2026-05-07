@@ -5,16 +5,15 @@
 # <https://github.com/aaclause/nvda-markdownForever>
 
 import codecs
+import os
 import os.path as osp
 import re
 import threading
-import time
 import urllib.parse as urlParse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import addonHandler
 import config
-from logHandler import log
-from .common import *
+from .common import convertToHTML, extractMetadata, isPath, realpath
 
 addonHandler.initTranslation()
 
@@ -45,59 +44,78 @@ def mergeHTMLTemplate(
 
 
 def indexOf(path):
-	ls = os.listdir(path)
+	entries = sorted(os.listdir(path), key=lambda name: name.lower())
 	out = "<h1>%s</h1><ul>" % _("Index of {path}").format(path=path)
-	for e in ls:
-		if isPath(path + e):
-			e += '/'
-		elif not re.match(r"^.+\.(html?|md|txt)$", e.lower()):
+	for entry in entries:
+		full_entry = osp.join(path, entry)
+		href = entry
+		if isPath(full_entry):
+			href += "/"
+		elif not re.match(r"^.+\.(html?|md|txt)$", entry.lower()):
 			continue
-		out += f'<li><a href="{e}">{e}</a></li>'
-	out += "</li>"
+		out += f'<li><a href="{href}">{href}</a></li>'
+	out += "</ul>"
 	return out
 
 
-def getFile(path, params=None, baseDir=None):
+def _resolve_request_path(request_path, base_dir):
+	base_dir = osp.abspath(realpath(base_dir))
+	relative_path = request_path.lstrip("/").replace("/", osp.sep)
+	full_path = osp.abspath(osp.join(base_dir, relative_path))
+	try:
+		is_within_base = osp.commonpath([base_dir, full_path]) == base_dir
+	except ValueError:
+		is_within_base = False
+	if not is_within_base:
+		return None
+	return full_path
+
+
+def getFile(path, baseDir=None):
 	if not baseDir:
 		baseDir = config.conf["markdownForever"]["defaultPath"]
-	fullPath = realpath(baseDir) + path.replace('/', r'\\')
-	while "\\\\" in fullPath:
-		fullPath = fullPath.replace("\\\\", '\\')
-	status_code = 200
-	body = None
+	encoding = config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"]
+	fullPath = _resolve_request_path(path, baseDir)
+	if not fullPath:
+		body = mergeHTMLTemplate(
+			title=_("Error 403"),
+			body="<p>%s.</p>" % _("Access denied")
+		)
+		return 403, body.encode(encoding)
 	if not osp.exists(fullPath):
-		status_code = 404
 		body = mergeHTMLTemplate(
 			title=_("Error 404"),
-			body="<p>%s.</p>" % _(
-				"The requested URL “{path}” was not found").format(path=path)
+			body="<p>%s.</p>" % _("The requested URL “{path}” was not found").format(path=path)
 		)
-	elif isPath(fullPath):
-		if not fullPath.endswith('\\'):
-			fullPath += '\\'
-		if not osp.exists(fullPath + "index.md"):
-			body = indexOf(fullPath)
+		return 404, body.encode(encoding)
+	if isPath(fullPath):
+		index_md = osp.join(fullPath, "index.md")
+		index_html = osp.join(fullPath, "index.html")
+		if osp.exists(index_md):
+			fullPath = index_md
+		elif osp.exists(index_html):
+			fullPath = index_html
+		else:
 			body = mergeHTMLTemplate(
 				title=_("Index of {path}").format(path=path),
-				body=body
+				body=indexOf(fullPath)
 			)
-	if not body:
-		f = codecs.open(
-			fullPath, encoding=config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"])
+			return 200, body.encode(encoding)
+	with codecs.open(fullPath, encoding=encoding) as f:
 		text = f.read()
-		if fullPath.endswith(".html") or fullPath.endswith(".htm"):
-			body = text
-		else:
-			metadata, text = extractMetadata(text)
-			body = convertToHTML(text, metadata, display=False)
-			body = mergeHTMLTemplate(title=metadata["title"], body=body)
-			f.close()
-	return status_code, body.encode(config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"])
+	if fullPath.lower().endswith((".html", ".htm")):
+		body = text
+	else:
+		metadata, text = extractMetadata(text)
+		body = convertToHTML(text, metadata, display=False)
+		body = mergeHTMLTemplate(title=metadata["title"], body=body)
+	return 200, body.encode(encoding)
 
 
 class Server(BaseHTTPRequestHandler):
 
-	def log_request(code='-', size='-'): pass
+	def log_request(self, code='-', size='-'):
+		return
 
 	def _set_response(self, status_code=200):
 		self.send_response(status_code)
@@ -107,22 +125,16 @@ class Server(BaseHTTPRequestHandler):
 
 	def do_GET(self):
 		path = urlParse.unquote(self.path)
-		params = {}
 		if '?' in path:
 			splitPath = path.split('?')
-			params = dict(urlParse.parse_qsl(''.join(splitPath[1:])))
 			path = splitPath[0]
-		satus_code, body = getFile(path, params)
-		self._set_response(satus_code)
+		status_code, body = getFile(path)
+		self._set_response(status_code)
 		self.wfile.write(body)
 
 	def do_POST(self):
-		# <--- Gets the size of data
-		content_length = int(self.headers["Content-Length"])
-		# <--- Gets the data itself
-		post_data = self.rfile.read(content_length)
-		self._set_response()
-		self.wfile.write(f"POST request for {self.path}".encode("utf-8"))
+		self._set_response(405)
+		self.wfile.write(b"Method Not Allowed")
 
 
 class CreateHTTPServer(threading.Thread):
@@ -147,6 +159,7 @@ def run():
 	if httpdThread:
 		return
 	httpdThread = CreateHTTPServer()
+	httpdThread.daemon = True
 	httpdThread.start()
 
 
@@ -154,8 +167,9 @@ def stop():
 	global httpdThread
 	if not httpdThread:
 		return
-	httpdThread.httpd.shutdown()
-	httpdThread.httpd.socket.close()
+	if httpdThread.httpd:
+		httpdThread.httpd.shutdown()
+		httpdThread.httpd.socket.close()
 	httpdThread.join()
 	httpdThread = None
 
