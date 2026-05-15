@@ -144,7 +144,7 @@ msgstr "HTML formateado copiado al portapapeles"
 
 #: addon/globalPlugins/markdownForever/__init__.py:234
 #: addon/globalPlugins/markdownForever/__init__.py:249
-msgid "An error occured"
+msgid "An error occurred"
 msgstr "Se ha producido un error"
 
 #: addon/globalPlugins/markdownForever/__init__.py:236

@@ -9,6 +9,7 @@ import os
 import os.path as osp
 import re
 import threading
+from html import escape as html_escape
 import urllib.parse as urlParse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import addonHandler
@@ -37,7 +38,7 @@ def mergeHTMLTemplate(
 	if not encoding:
 		encoding = config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"]
 	return HTMLTemplate.format(
-		title=title,
+		title=html_escape(title, quote=True),
 		body=body,
 		encoding=encoding
 	)
@@ -45,7 +46,7 @@ def mergeHTMLTemplate(
 
 def indexOf(path):
 	entries = sorted(os.listdir(path), key=lambda name: name.lower())
-	out = "<h1>%s</h1><ul>" % _("Index of {path}").format(path=path)
+	out = "<h1>%s</h1><ul>" % html_escape(_("Index of {path}").format(path=path), quote=True)
 	for entry in entries:
 		full_entry = osp.join(path, entry)
 		href = entry
@@ -53,7 +54,10 @@ def indexOf(path):
 			href += "/"
 		elif not re.match(r"^.+\.(html?|md|txt)$", entry.lower()):
 			continue
-		out += f'<li><a href="{href}">{href}</a></li>'
+		href_attr = urlParse.quote(href, safe="/:@")
+		out += '<li><a href="%s">%s</a></li>' % (
+			html_escape(href_attr, quote=True),
+			html_escape(href, quote=True))
 	out += "</ul>"
 	return out
 
@@ -71,9 +75,25 @@ def _resolve_request_path(request_path, base_dir):
 	return full_path
 
 
+def _web_document_root():
+	hs = config.conf["markdownForever"]["HTTPServer"]
+	active = str(hs["activeWebRoot"] or "").strip()
+	if active:
+		base = realpath(active)
+		if osp.isdir(base):
+			return base
+	for _k, v in hs["rootDirs"].copy().items():
+		if not v:
+			continue
+		rv = realpath(v)
+		if osp.isdir(rv):
+			return rv
+	return realpath(config.conf["markdownForever"]["defaultPath"])
+
+
 def getFile(path, baseDir=None):
 	if not baseDir:
-		baseDir = config.conf["markdownForever"]["defaultPath"]
+		baseDir = _web_document_root()
 	encoding = config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"]
 	fullPath = _resolve_request_path(path, baseDir)
 	if not fullPath:

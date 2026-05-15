@@ -135,7 +135,7 @@ msgstr "複製格式化的 HTML 到剪貼簿"
 
 #: addon/globalPlugins/markdownForever/__init__.py:241
 #: addon/globalPlugins/markdownForever/__init__.py:256
-msgid "An error occured"
+msgid "An error occurred"
 msgstr "發生錯誤"
 
 #: addon/globalPlugins/markdownForever/__init__.py:243

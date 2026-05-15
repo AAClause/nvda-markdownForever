@@ -6,6 +6,7 @@
 
 from . import virtualDocuments
 from logHandler import log
+import codecs
 import ui
 import versionInfo
 from urllib.request import Request, urlopen
@@ -180,7 +181,7 @@ def _get_markdown_renderer(extras):
 	return renderer
 
 
-def _build_heading_ids_and_toc(html):
+def _build_heading_ids_and_toc(html, include_toc_html=False):
 	soup = BeautifulSoup(html, "html.parser")
 	used_ids = set()
 	toc_items = []
@@ -198,7 +199,7 @@ def _build_heading_ids_and_toc(html):
 		used_ids.add(candidate)
 		toc_items.append((candidate, heading_text))
 	toc_html = None
-	if len(toc_items) > 1:
+	if include_toc_html and len(toc_items) > 1:
 		toc_parts = ["<ul>"]
 		for anchor, text in toc_items:
 			toc_parts.append(f'<li><a href="#{anchor}">{escape(text)}</a></li>')
@@ -208,11 +209,24 @@ def _build_heading_ids_and_toc(html):
 
 
 def realpath(path):
-	path = path.lower()
-	vars = ["appdata", "tmp", "temp", "userprofile"]
-	for var in vars:
-		path = path.replace("%%%s%%" % var, os.environ[var])
-	path = path.replace("%addondir%", addonPath)
+	"""Expand %env% placeholders; preserve path case (Windows-safe)."""
+	if not isinstance(path, str):
+		path = str(path)
+	for var in ("appdata", "tmp", "temp", "userprofile"):
+		token = "%%%s%%" % var
+		rep = ""
+		for key, val in os.environ.items():
+			if key.lower() == var:
+				rep = val
+				break
+		lower_path = path.lower()
+		tok_lower = token.lower()
+		i = lower_path.find(tok_lower)
+		while i != -1:
+			path = path[:i] + rep + path[i + len(token) :]
+			lower_path = path.lower()
+			i = lower_path.find(tok_lower)
+	path = path.replace("%addondir%", addonPath).replace("%ADDONDIR%", addonPath)
 	return path
 
 
@@ -262,27 +276,25 @@ def getText():
 	if re.match(pathPattern, text):
 		fp = realpath(text)
 		if os.path.isfile(fp):
-			f = open(fp, "rb")
-			raw = f.read()
+			with open(fp, "rb") as f:
+				raw = f.read()
 			if raw.startswith(codecs.BOM_UTF8):
 				raw = raw[3:]
-			f.close()
-			text = raw.decode()
+			text = raw.decode("utf-8", errors="replace")
 			isLocalFile = True
 		else:
 			err = _("Invalid file path")
 	if not isLocalFile and re.match(URLPattern, text.strip()):
 		ctx = ssl.create_default_context()
-		ctx.check_hostname = False
-		ctx.verify_mode = ssl.CERT_NONE
 		try:
 			req = Request(text)
 			req.add_header("Accept", "text/html")
 			req.add_header("Accept-encoding", "identity")
-			j = urlopen(req, context=ctx)
-			data = j.read()
+			with urlopen(req, context=ctx) as j:
+				data = j.read()
+				hdr = j.headers
 			possibleEncodings = []
-			enc_ = j.headers.get_content_charset("UTF-8")
+			enc_ = hdr.get_content_charset("UTF-8")
 			log.debug("%s charset found in HTTP headers" % enc_)
 			possibleEncodings.append(enc_)
 			pattern = r"^.*charset=\"?([0-9a-zA-Z\-]+)\"?.*$"
@@ -294,7 +306,7 @@ def getText():
 					enc_ = re.sub(pattern, r"\1", enc_.decode("UTF-8"))
 					possibleEncodings.insert(0, enc_)
 			except ValueError:
-				log.debug(j.headers)
+				log.debug(hdr)
 			possibleEncodings.append("UTF-8")
 			log.debug("%s charset found in <head> HTML" % enc_)
 			for possibleEncoding in possibleEncodings:
@@ -350,15 +362,14 @@ def md2HTML(md, metadata=None):
 	assign_heading_ids = toc_requested or ("header-ids" in extras)
 	toc_html = None
 	if assign_heading_ids:
-		html, toc_html = _build_heading_ids_and_toc(html)
+		html, toc_html = _build_heading_ids_and_toc(html, include_toc_html=toc_requested)
 	return MarkdownRenderResult(html, toc_html=toc_html)
 
 
 def writeFile(fp, content):
 	fp = realpath(fp)
-	f = open(fp, "wb")
-	f.write(content.encode())
-	f.close()
+	with open(fp, "wb") as f:
+		f.write(content.encode("utf-8"))
 
 
 def getFileContent(fp):
@@ -369,7 +380,7 @@ def getFileContent(fp):
 		fp = fp_
 	try:
 		with open(fp, "rb") as f:
-			text = f.read().decode("UTF-8")
+			text = f.read().decode("UTF-8", errors="replace")
 		metadata, content = extractMetadata(text)
 	except BaseException as err:
 		msg = _("Unable to include “{filePath}”").format(filePath=fp)
@@ -379,7 +390,7 @@ def getFileContent(fp):
 
 def backTranslateExtraTags(text):
 	soup = BeautifulSoup(text)
-	matches = soup.findAll(
+	matches = soup.find_all(
 		["span", "div"], class_=re.compile(r"^extratag_%.+%$"))
 	for match in matches:
 		extratag = match["class"][-1].split('_', 1)[-1]
@@ -406,7 +417,7 @@ def extractMetadata(text):
 			try:
 				end = (text.index(ln * 2)-3)
 				y = text[(3 + len(ln)):end].strip()
-				docs = yaml.load_all(y, Loader=yaml.FullLoader)
+				docs = yaml.load_all(y, Loader=yaml.SafeLoader)
 				for doc in docs:
 					metadata = doc
 				text = text[end+3:].strip()
@@ -457,7 +468,7 @@ def extractMetadata(text):
 	metadata["filename"] = metadata["filename"] if "filename" in metadata.keys() and isValidFileName(metadata["filename"]) else get_default_file_name()
 	if metadata["mathjax"]:
 		HTMLHead.append(
-			'<script src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>')
+			'<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" type="text/javascript" async></script>')
 	if "title" in metadata.keys():
 		HTMLHead.append("<title>%s</title>" % metadata["title"])
 		HTMLHeader.append('<h1 class="title">%s</h1>' % metadata["title"])
@@ -586,7 +597,13 @@ def getReplacements(lang):
 		("%NVDAVersion%", versionInfo.version, 1),
 		("%toc%", internalTocTag, 0)
 	]
-	locale.setlocale(locale.LC_ALL, locale.getdefaultlocale()[0])
+	try:
+		locale.setlocale(locale.LC_ALL, locale.getdefaultlocale()[0])
+	except (TypeError, IndexError, locale.Error):
+		try:
+			locale.setlocale(locale.LC_ALL, "")
+		except locale.Error:
+			pass
 	return replacements
 
 
@@ -605,8 +622,8 @@ def processExtraTags(soup, lang='', allRepl=True, allowBacktranslate=True):
 	for toSearch, replaceBy, replaceAlways in replacements:
 		if allRepl or (not allRepl and replaceAlways):
 			try:
-				matches = soup.findAll(
-					text=re.compile(r".{0,}%s.{0,}" % toSearch))
+				matches = soup.find_all(
+					string=re.compile(r".{0,}%s.{0,}" % re.escape(toSearch)))
 				for match in matches:
 					parents = [parent.name for parent in match.parents]
 					if "code" not in parents and "pre" not in parents:
@@ -628,7 +645,7 @@ def processExtraTags(soup, lang='', allRepl=True, allowBacktranslate=True):
 
 def applyAutoNumberHeadings(soup, before=""):
 	patternHeaders = re.compile(r"h[0-6]")
-	matches = soup.findAll(patternHeaders, recursive=True)
+	matches = soup.find_all(patternHeaders, recursive=True)
 	l = []
 	previousHeadingLevel = 0
 	for match in matches:
@@ -645,7 +662,7 @@ def applyAutoNumberHeadings(soup, before=""):
 				l[-1] += 1
 			except KeyError as err:
 				log.error((repr(err), l, previousHeadingLevel,
-						   currentHeadingLevel, match.text, d))
+						   currentHeadingLevel, match.text))
 				return soup
 		else:
 			diff = currentHeadingLevel-previousHeadingLevel
@@ -658,7 +675,9 @@ def applyAutoNumberHeadings(soup, before=""):
 	return soup
 
 
-def getMetadataBlock(metadata, ignore=[]):
+def getMetadataBlock(metadata, ignore=None):
+	if ignore is None:
+		ignore = []
 	ignore_ = ["HTMLHead", "HTMLHeader", "genMetadata", "detectExtratags"]
 	metadata = {k: v for k, v in metadata.items() if ((isinstance(
 		v, str) and v) or not isinstance(v, str)) and k not in (ignore + ignore_)}
@@ -749,7 +768,7 @@ def add_back_toc(content, before=["h1"], after=["h2"]):
 	return soup.prettify()
 
 def convertToHTML(text, metadata, save=False, src=False, useTemplateHTML=True, display=True, fp=''):
-	toc = metadata["toc"]
+	toc_enabled = bool(metadata["toc"])
 	title = metadata["title"]
 	lang = metadata["lang"]
 	extratags = metadata["extratags"]
@@ -757,7 +776,7 @@ def convertToHTML(text, metadata, save=False, src=False, useTemplateHTML=True, d
 	HTMLHead = metadata["HTMLHead"]
 	res = md2HTML(text, metadata)
 	toc_html = None
-	if res.toc_html and res.toc_html.count("<li>") > 1:
+	if toc_enabled and res.toc_html and res.toc_html.count("<li>") > 1:
 		toc_html = res.toc_html
 	body = str(res)
 	del res

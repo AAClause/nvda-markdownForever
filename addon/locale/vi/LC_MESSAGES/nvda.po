@@ -140,7 +140,7 @@ msgstr "Đã chép định dạng HTML vào bộ nhớ tạm"
 
 #: addon/globalPlugins/markdownForever/__init__.py:234
 #: addon/globalPlugins/markdownForever/__init__.py:249
-msgid "An error occured"
+msgid "An error occurred"
 msgstr "Có lỗi xảy ra"
 
 #: addon/globalPlugins/markdownForever/__init__.py:236

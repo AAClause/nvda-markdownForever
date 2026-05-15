@@ -61,7 +61,8 @@ confSpecs = {
 		"host": 'string(default="127.0.0.1")',
 		"port": "integer(min=1, max=65535, default=8794)",
 		"defaultEncoding": 'string(default="UTF-8")',
-		"rootDirs": {}
+		"rootDirs": {},
+		"activeWebRoot": 'string(default="")',
 	}
 }
 config.conf.spec["markdownForever"] = confSpecs
@@ -156,15 +157,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		return HTTPServer
 
 	@staticmethod
+	def _get_text_and_metadata_from_selection():
+		text, err = getText()
+		if err:
+			ui.message(err)
+			return None
+		if not text:
+			ui.message(_("No text"))
+			return None
+		return extractMetadata(text)
+
+	@staticmethod
 	def onDoc(evt, lang=defaultLanguage.split('_')[0]):
 		MDLocation = os.path.join(addonPath, "doc", lang + ".md")
 		if not os.path.exists(MDLocation):
 			MDLocation = os.path.join(addonPath, "doc", "en"+".md")
-		f = codecs.open(MDLocation, "rb")
-		raw = f.read()
+		with open(MDLocation, "rb") as f:
+			raw = f.read()
 		if raw.startswith(codecs.BOM_UTF8):
 			raw = raw[3:]
-		metadata, text = extractMetadata(raw.decode("UTF-8"))
+		metadata, text = extractMetadata(raw.decode("UTF-8", errors="replace"))
 		HTMLLocation = MDLocation.replace(".md", ".html")
 		convertToHTML(
 			text, metadata,
@@ -182,12 +194,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		return os.startfile("https://github.com/aaclause/nvda-markdownForever")
 
 	def script_md2htmlSrcInNVDA(self, gesture):
-		text, err = getText()
-		if err:
-			return ui.message(err)
-		if not text:
-			return ui.message(_("No text"))
-		metadata, text = extractMetadata(text)
+		res = self._get_text_and_metadata_from_selection()
+		if res is None:
+			return
+		metadata, text = res
 		convertToHTML(text, metadata, save=False,
 					  src=True, useTemplateHTML=False)
 	script_md2htmlSrcInNVDA.__doc__ = _("Show the HTML source from Markdown")
@@ -207,48 +217,40 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		return convertToMD(text, metadata)
 
 	def script_md2htmlInNVDA(self, gesture):
-		text, err = getText()
-		if err:
-			return ui.message(err)
-		if not text:
-			return ui.message(_("No text"))
-		metadata, text = extractMetadata(text)
+		res = self._get_text_and_metadata_from_selection()
+		if res is None:
+			return
+		metadata, text = res
 		convertToHTML(text, metadata)
 	script_md2htmlInNVDA.__doc__ = _("Markdown to HTML conversion. The result is displayed in a virtual buffer of NVDA")
 
 	def script_md2htmlInBrowser(self, gesture):
-		text, err = getText()
-		if err:
-			return ui.message(err)
-		if not text:
-			return ui.message(_("No text"))
-		metadata, text = extractMetadata(text)
+		res = self._get_text_and_metadata_from_selection()
+		if res is None:
+			return
+		metadata, text = res
 		convertToHTML(text, metadata, save=True)
 	script_md2htmlInBrowser.__doc__ = _("Markdown to HTML conversion. The result is displayed in your default browser")
 
 	def script_copyHTMLSrcToClip(self, gesture):
-		text, err = getText()
-		if err:
-			return ui.message(err)
-		if not text:
-			return ui.message(_("No text"))
-		metadata, text = extractMetadata(text)
+		res = self._get_text_and_metadata_from_selection()
+		if res is None:
+			return
+		metadata, text = res
 		api.copyToClip(convertToHTML(text, metadata, src=True,
 									 display=False, useTemplateHTML=False))
 		ui.message(_("HTML source copied to clipboard"))
 	script_copyHTMLSrcToClip.__doc__ = _("Markdown to HTML source conversion. The result is copied to clipboard")
 
 	def script_copyFormattedHTMLToClip(self, gesture):
-		text, err = getText()
-		if err:
-			return ui.message(err)
-		if not text:
-			return ui.message(_("No text"))
-		metadata, text = extractMetadata(text)
+		res = self._get_text_and_metadata_from_selection()
+		if res is None:
+			return
+		metadata, text = res
 		if copyToClipAsHTML(convertToHTML(text, metadata, src=True, display=False, save=False)):
 			return ui.message(_("Formatted HTML copied to clipboard"))
 		else:
-			ui.message(_("An error occured"))
+			ui.message(_("An error occurred"))
 	script_copyFormattedHTMLToClip.__doc__ = _(
 		"Markdown to formatted HTML conversion. The result is copied to clipboard")
 
@@ -263,7 +265,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			api.copyToClip(res)
 			ui.message(_("Markdown copied to clipboard"))
 		else:
-			ui.message(_("An error occured"))
+			ui.message(_("An error occurred"))
 	script_copyMarkdownToClip.__doc__ = _(
 		"HTML to Markdown conversion. The result is copied to clipboard")
 

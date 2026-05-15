@@ -141,7 +141,7 @@ msgstr "HTML formaté copié dans le presse-papier"
 
 #: addon\globalPlugins\markdownForever\__init__.py:241
 #: addon\globalPlugins\markdownForever\__init__.py:256
-msgid "An error occured"
+msgid "An error occurred"
 msgstr "Une erreur est survenue"
 
 #: addon\globalPlugins\markdownForever\__init__.py:243

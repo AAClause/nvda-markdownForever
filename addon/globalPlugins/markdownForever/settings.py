@@ -359,6 +359,15 @@ class WebServerDlg(gui.settingsDialogs.SettingsPanel):
 
 	title = _("Web server")
 
+	def getRootFolders(self):
+		out = []
+		for _, v in config.conf["markdownForever"]["HTTPServer"]["rootDirs"].copy().items():
+			if v:
+				out.append(v)
+		if not out:
+			out.append(config.conf["markdownForever"]["defaultPath"])
+		return out
+
 	def makeSettings(self, settingsSizer):
 		mainSizer = wx.BoxSizer(wx.VERTICAL)
 		sHelper = gui.guiHelper.BoxSizerHelper(self, orientation=wx.VERTICAL)
@@ -370,15 +379,15 @@ class WebServerDlg(gui.settingsDialogs.SettingsPanel):
 		self.defaultEncoding = sHelper.addLabeledControl(
 			_("Default &encoding:"), wx.TextCtrl, value=config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"])
 		rootFoldersText = _("Root &folders:")
+		choices = self.getRootFolders()
 		self.rootFoldersListBox = sHelper.addLabeledControl(
-			rootFoldersText, wx.Choice, choices=self.getRootFolders())
+			rootFoldersText, wx.Choice, choices=choices)
+		active = str(config.conf["markdownForever"]["HTTPServer"]["activeWebRoot"] or "").strip()
+		if active and active in choices:
+			self.rootFoldersListBox.SetSelection(choices.index(active))
+		elif choices:
+			self.rootFoldersListBox.SetSelection(0)
 		HTTPServer.stop()
-
-	def getRootFolders(self):
-		out = []
-		for _, v in config.conf["markdownForever"]["HTTPServer"]["rootDirs"].copy().items():
-			out.append(v)
-		return out
 
 	def onSave(self):
 		host = self.host.GetValue().strip()
@@ -399,6 +408,10 @@ class WebServerDlg(gui.settingsDialogs.SettingsPanel):
 				)
 				return self.defaultEncoding.SetFocus()
 			config.conf["markdownForever"]["HTTPServer"]["defaultEncoding"] = defaultEncoding
+		choices = self.getRootFolders()
+		sel = self.rootFoldersListBox.GetSelection()
+		if 0 <= sel < len(choices):
+			config.conf["markdownForever"]["HTTPServer"]["activeWebRoot"] = choices[sel]
 
 
 class AddonSettingsDialog(gui.settingsDialogs.MultiCategorySettingsDialog):

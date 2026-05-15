@@ -4,6 +4,8 @@
 # Copyright 2019-2021 André-Abush Clause, Sof and other contributors. Released under GPL.
 # <https://github.com/aaclause/nvda-markdownForever>
 
+from html import escape as escapeHTML
+
 from logHandler import log
 import tones
 import time

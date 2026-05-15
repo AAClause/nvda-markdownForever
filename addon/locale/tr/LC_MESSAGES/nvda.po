@@ -138,7 +138,7 @@ msgstr "Biçimlendirilmiş HTML panoya kopyalandı"
 
 #: addon\globalPlugins\markdownForever\__init__.py:241
 #: addon\globalPlugins\markdownForever\__init__.py:256
-msgid "An error occured"
+msgid "An error occurred"
 msgstr "Bir hata oluştu"
 
 #: addon\globalPlugins\markdownForever\__init__.py:243

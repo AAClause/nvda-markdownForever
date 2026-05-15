@@ -31,6 +31,7 @@ checkInProgress = False
 
 
 def paramsDL(): return {
+	# Server API expects this exact key name (historic spelling).
 	"protocoleVersion": "3",
 	"addonVersion": addonInfos["version"],
 	"NVDAVersion": versionInfo.version,
@@ -66,12 +67,11 @@ def checkUpdates(sil=False):
 	def upToDateDialog(msg=''):
 		global checkInProgress
 		checkInProgress = True
-		res = gui.messageBox(
+		gui.messageBox(
 			(_("You are up-to-date. %s is the latest version.") %
 			 addonInfos["version"] + '\n%s' %
 			 msg).strip(), title, wx.OK | wx.ICON_INFORMATION)
-		if res:
-			checkInProgress = False
+		checkInProgress = False
 
 	def errorUpdateDialog(details=None):
 		global checkInProgress
@@ -135,21 +135,20 @@ def checkUpdates(sil=False):
 		url = url[0:-1]
 	url = "%s.json?%s" % (url, urlencode(paramsDL()))
 	try:
-		page = urlopen(url)
-		if page.code == 200:
+		with urllib.request.urlopen(url) as page:
+			if page.code != 200:
+				raise ValueError("Invalid server code response: %s" % page.code)
 			data = json.load(page)
-			if not data["success"]:
-				raise ValueError("Invalid JSON response")
-			if not data["upToDate"]:
-				newUpdate = True
-			if not newUpdate and sil:
-				return log.debug("No update")
-			if newUpdate:
-				wx.CallAfter(availableUpdateDialog, data)
-			else:
-				wx.CallAfter(upToDateDialog, data["msg"])
+		if not data["success"]:
+			raise ValueError("Invalid JSON response")
+		if not data["upToDate"]:
+			newUpdate = True
+		if not newUpdate and sil:
+			return log.debug("No update")
+		if newUpdate:
+			wx.CallAfter(availableUpdateDialog, data)
 		else:
-			raise ValueError("Invalid server code response: %s" % page.code)
+			wx.CallAfter(upToDateDialog, data["msg"])
 	except BaseException as err:
 		log.warning(err)
 		if not newUpdate and sil:
@@ -172,8 +171,9 @@ class UpdateCheck(threading.Thread):
 	shouldStop = False
 
 	def run(self):
+		self._idle_wake = threading.Event()
 		if globalVars.appArgs.secure or config.isAppX or globalVars.appArgs.launcher:
-			return self.stop()
+			return
 		checkingForced = False
 		delayChecking = 86400 if config.conf[sectionName]["updateChannel"] != "stable" else 604800
 		while not self.shouldStop:
@@ -191,7 +191,11 @@ class UpdateCheck(threading.Thread):
 					checkUpdates(True)
 					config.conf[sectionName]["lastCheckUpdate"] = time.time()
 				checkingForced = False
-			time.sleep(0.01)
+			self._idle_wake.wait(5.0)
+			self._idle_wake.clear()
 
 	def stop(self):
 		self.shouldStop = True
+		wake = getattr(self, "_idle_wake", None)
+		if wake is not None:
+			wake.set()
